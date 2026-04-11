@@ -1,0 +1,38 @@
+# === Build Artifacts ===
+src-tauri/target/
+dist/
+dist-ssr/
+
+# === Dependencies ===
+node_modules/
+
+# === Environment & Secrets ===
+.env
+.env.*
+!.env.example
+.env.local
+
+# === OS ===
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# === Editor ===
+.vscode/settings.json
+.idea/
+*.code-workspace
+
+# === Rust ===
+Cargo.lock
+*.pdb
+
+# === Logs ===
+*.log
+npm-debug.log*
+
+# === Misc ===
+*.local
+.tmp/
+.cache/
