@@ -55,6 +55,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf protobuf-compiler
 
+      - name: Install macOS system dependencies
+        if: matrix.platform == 'macos-latest'
+        run: |
+          brew install protobuf
+
+      - name: Install Windows system dependencies
+        if: matrix.platform == 'windows-latest'
+        run: |
+          choco install protoc -y
+
       # NOTE: src-tauri/Cargo.lock is gitignored to avoid conflicts across platforms.
       # Dependencies are fetched fresh each run. This avoids cache invalidation issues.
       # If builds are slow, consider committing Cargo.lock and re-enabling rust-cache:
