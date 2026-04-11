@@ -10,17 +10,11 @@ export function SynergyStream() {
     insightsGetPending()
       .then(setInsights)
       .catch(() => {
-        setInsights(getDemoInsights());
+        console.warn("[SynergyStream] KuzuDB not connected, showing empty insights");
+        setInsights([]);
       });
 
-    const interval = setInterval(() => {
-      setInsights((prev) => {
-        if (prev.length > 20) return prev;
-        return [createRandomInsight(), ...prev];
-      });
-    }, 8000);
 
-    return () => clearInterval(interval);
   }, []);
 
   const filterTypes = ["all", "synthesis", "prediction", "contradiction", "connection"];
@@ -137,48 +131,6 @@ function confidenceColor(conf: number): string {
   return "#ff6b6b";
 }
 
-function createRandomInsight(): InsightCard {
-  const types = ["synthesis", "prediction", "contradiction", "connection"];
-  const type = types[Math.floor(Math.random() * types.length)];
-  return {
-    id: `live-${Date.now()}`,
-    title: "New insight detected",
-    content: "The knowledge graph found a new connection between recent entries.",
-    insight_type: type as InsightCard["insight_type"],
-    confidence: 0.6 + Math.random() * 0.4,
-    created_at: Date.now(),
-    tags: ["live", "detected"],
-  };
-}
 
-function getDemoInsights(): InsightCard[] {
-  return [
-    {
-      id: "1",
-      title: "Synthesis: Dual-provider routing",
-      content: "The MiniMax + Gemini fallback strategy provides resilience. When T3 MiniMax fails, the system automatically retries with Gemini without user intervention.",
-      insight_type: "synthesis",
-      confidence: 0.92,
-      created_at: Date.now() - 300000,
-      tags: ["ai", "routing", "synthesis"],
-    },
-    {
-      id: "2",
-      title: "Connection: KuzuDB ↔ Qdrant sync",
-      content: "The 2PC commit ensures KuzuDB and Qdrant never drift. If Qdrant upsert fails, KuzuDB is rolled back to the pre-write state.",
-      insight_type: "connection",
-      confidence: 0.88,
-      created_at: Date.now() - 600000,
-      tags: ["sync", "2pc", "database"],
-    },
-    {
-      id: "3",
-      title: "Prediction: Graph density spike",
-      content: "Based on current brain dump frequency, the knowledge graph will reach 1000 nodes within 7 days.",
-      insight_type: "prediction",
-      confidence: 0.71,
-      created_at: Date.now() - 900000,
-      tags: ["prediction", "graph", "growth"],
-    },
-  ];
-}
+
+

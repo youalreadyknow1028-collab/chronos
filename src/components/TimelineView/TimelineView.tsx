@@ -15,7 +15,8 @@ export function TimelineView() {
     graphGetTimeline(200)
       .then(setEntries)
       .catch(() => {
-        setEntries(getDemoTimeline());
+        console.warn("[TimelineView] KuzuDB not connected, showing empty timeline");
+        setEntries([]);
       });
   }, []);
 
@@ -95,13 +96,4 @@ export function TimelineView() {
   );
 }
 
-function getDemoTimeline(): TimelineEntry[] {
-  const now = Date.now();
-  return [
-    { id: "1", event_type: "thought_added", description: "The synthesis engine should use bitemporal versioning", timestamp: now - 300000, entity_id: "1", tags: ["synthesis", "design"] },
-    { id: "2", event_type: "wiki_updated", description: "Updated KuzuDB schema documentation", timestamp: now - 600000, entity_id: "2", tags: ["docs", "kuzu"] },
-    { id: "3", event_type: "claim_added", description: "Chronos will achieve 60fps graph rendering", timestamp: now - 900000, entity_id: "3", tags: ["performance", "graph"] },
-    { id: "4", event_type: "connection_found", description: "MiniMax and Gemini providers share the same budget pool", timestamp: now - 1200000, entity_id: "4", tags: ["ai", "providers"] },
-    { id: "5", event_type: "thought_added", description: "2PC commit must prevent orphaned records in Qdrant", timestamp: now - 1800000, entity_id: "5", tags: ["sync", "2pc"] },
-  ];
-}
+

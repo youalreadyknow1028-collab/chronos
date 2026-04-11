@@ -30,26 +30,7 @@ export function GraphView() {
   const nodesRef = useRef<Node[]>([]);
   const edgesRef = useRef<Edge[]>([]);
 
-  const getDemoGraph = (): GraphData => ({
-    nodes: [
-      { id: "1", label: "Nexus Core", type: "Agent", confidence: 1.0 },
-      { id: "2", label: "KuzuDB", type: "Concept", confidence: 0.9 },
-      { id: "3", label: "Qdrant", type: "Concept", confidence: 0.9 },
-      { id: "4", label: "MiniMax AI", type: "Concept", confidence: 0.85 },
-      { id: "5", label: "Gemini", type: "Concept", confidence: 0.8 },
-      { id: "6", label: "Thoughts", type: "WikiEntry", confidence: 0.75 },
-      { id: "7", label: "Claims", type: "WikiEntry", confidence: 0.75 },
-      { id: "8", label: "Timeline", type: "WikiEntry", confidence: 0.7 },
-    ],
-    edges: [
-      { source: "1", target: "2", type: "USES" },
-      { source: "1", target: "3", type: "USES" },
-      { source: "1", target: "4", type: "USES" },
-      { source: "4", target: "5", type: "FALLBACK" },
-      { source: "6", target: "7", type: "LINKS_TO" },
-      { source: "6", target: "8", type: "LINKS_TO" },
-    ],
-  });
+
 
   const initializeGraph = useCallback((data: GraphData) => {
     const canvas = canvasRef.current;
@@ -96,9 +77,10 @@ export function GraphView() {
         initializeGraph(data);
       })
       .catch(() => {
-        const demo = getDemoGraph();
-        setGraphData(demo);
-        initializeGraph(demo);
+        console.warn("[GraphView] KuzuDB not connected, showing empty graph");
+        const empty: GraphData = { nodes: [], edges: [] };
+        setGraphData(empty);
+        initializeGraph(empty);
       });
   }, [initializeGraph]);
 
