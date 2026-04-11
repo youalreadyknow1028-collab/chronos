@@ -16,11 +16,15 @@ pub fn run() {
 
     tracing::info!("Chronos starting up...");
 
-    // TODO: Initialize KuzuDB and Qdrant clients here
-    // let kuzu = KuzuClient::new("./data/chronos.kuzu")?;
-    // let qdrant = QdrantVectorClient::new("http://localhost:6334").await?;
-    // kuzu.init().await?;
-    // qdrant.init_collections().await?;
+    // Phase B: Initialize LanceDB vector store
+    if let Err(e) = core::lance::init_lance() {
+        tracing::warn!("[Startup] LanceDB init failed: {}. Vector storage unavailable.", e);
+    }
+
+    // Phase B: Initialize candle embedder (downloads model from HuggingFace Hub on first run)
+    if let Err(e) = core::embed::init_embedder() {
+        tracing::warn!("[Startup] Candle embedder init failed: {}. Embeddings unavailable.", e);
+    }
 
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -41,6 +45,11 @@ pub fn run() {
             core::ipc::pipeline::pipeline_budget_status,
             core::ipc::pipeline::pipeline_status,
             core::ipc::pipeline::pipeline_trigger_cron,
+            // === Settings ===
+            core::ipc::settings::save_api_key,
+            core::ipc::settings::load_api_key,
+            core::ipc::settings::list_settings,
+            core::ipc::settings::trigger_vault_sync,
         ])
         .setup(|_app| {
             tracing::info!("Chronos Tauri app setup complete");

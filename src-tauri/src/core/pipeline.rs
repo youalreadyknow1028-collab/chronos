@@ -10,6 +10,7 @@
 
 use crate::core::minimax::{TierRouter, BudgetStatus};
 use crate::core::embed;
+use crate::core::lance::{self, EmbedRecord};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
@@ -68,8 +69,9 @@ pub struct PipelineError {
 ///   2. Run T1+T2 (quick analysis)
 ///   3. Run T3 (synthesis)
 ///   4. Run T4 (deep reasoning, if budget allows)
-///   5. Wire to Qdrant (embed wiki entry)
-///   6. Two-Phase Commit to finalize
+///   5. Generate embedding via candle (all-MiniLM-L6-v2, 384-dim)
+///   6. Store embedding + metadata in LanceDB (Phase B)
+///   7. Two-Phase Commit to finalize
 pub async fn pipeline_ingest(
     request: IngestRequest,
     _router: &TierRouter,
@@ -87,22 +89,43 @@ pub async fn pipeline_ingest(
     let tier_used = "t3".to_string();
     let provider_used = "minimax".to_string();
 
-    // PHASE A: Generate actual embedding with fastembed (384-dim all-MiniLM-L6-v2)
-    // This is the foundation — embeddings are generated but not yet stored.
-    // Phase B will wire storage via hnswlib-rs.
-    let embedding_dim = embed::EMBEDDING_DIM;
-    match embed::embed_text(&request.content) {
+    // PHASE B: Generate embedding with candle + hf-hub (all-MiniLM-L6-v2, 384-dim)
+    // Then store in LanceDB immediately.
+    let emb_result: Option<embed::Embedding> = match embed::embed_text(&request.content) {
         Ok(emb) => {
             info!(
-                "[Pipeline] Generated embedding: dim={}, model={}, norm={:.4}",
+                "[Pipeline] Embedding generated: dim={}, model={}",
                 emb.vector.len(),
-                emb.model,
-                emb.normalized().iter().take(3).sum::<f32>()
+                emb.model
             );
-            // NOTE: emb.vector is 384-dim. Not stored yet — Phase B wires hnswlib-rs storage.
+            // Verify 384-dim
+            assert_eq!(
+                emb.vector.len(),
+                384,
+                "all-MiniLM-L6-v2 must produce 384-dim vectors"
+            );
+            Some(emb)
         }
         Err(e) => {
             warn!("[Pipeline] Embedding generation failed (non-fatal): {}. Proceeding without embedding.", e);
+            None
+        }
+    };
+
+    // Store embedding + metadata in LanceDB
+    if let Some(emb) = &emb_result {
+        let record = EmbedRecord {
+            id: wiki_id.clone(),
+            content: request.content.clone(),
+            source: request.source.clone(),
+            tags: request.tags.clone(),
+            vector: emb.vector.clone(),
+            created_at: chrono::Utc::now().timestamp_millis(),
+        };
+        if let Err(e) = lance::insert_record(record) {
+            warn!("[Pipeline] LanceDB insert failed: {}. Proceeding without storage.", e);
+        } else {
+            info!("[Pipeline] LanceDB: stored {} rows", 1);
         }
     }
 
@@ -119,9 +142,6 @@ pub async fn pipeline_ingest(
     // };
     // let (_, _) = sync_note_2pc(kuzu, qdrant, sync_point).await
     //     .map_err(|e| PipelineError { code: "SYNC_ERROR".into(), message: e.to_string() })?;
-
-    // Temporary: expose embedding_dim at module level so Phase B can reference it
-    let _ = embedding_dim;
 
     info!("[Pipeline] Ingest complete: note_id={}, wiki_id={}", note_id, wiki_id);
 

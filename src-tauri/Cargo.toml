@@ -24,17 +24,30 @@ thiserror = "2"
 anyhow = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
+dirs = "5"
 zeroize = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 
+# === Phase B: Candle Embedder ===
+# candle-core: Low-level tensor operations (no GPU needed for inference)
+# candle-nn: Neural network layers (Transformer, Linear, etc.)
+# candle-transformers: BERT model implementation for sentence embeddings
+# hf-hub: Download model weights + tokenizer from HuggingFace at runtime
+# tokenizers: Fast BERT tokenizer (BPE-based)
+# NOTE: All are pure Rust — no C++ linking required.
+candle-core = "0.10"
+arrow-schema = "57"
+futures = "0.3"
+futures-util = "0.3"     # Schema, Field, DataType (LanceDB re-exports this as lancedb::arrow_schema)
+arrow-array = "57"      # RecordBatch, StringArray, FixedSizeListArray (LanceDB pulls this in)
+candle-nn = "0.10"
+candle-transformers = "0.10"
+hf-hub = "0.4"
+tokenizers = "0.22"
+
 # === Phase A: Embedded AI Stack ===
 # lancedb: Serverless embedded vector DB (Rust-native, no server)
-# Supports 384-dim vectors natively. Edition 2024 requires rust 1.91+ (met: 1.94.1).
-# Note: hnswlib-rs was blocked — pulls corenn-kernels which requires nightly Rust.
+# Supports 384-dim vectors natively.
 lancedb = "0.27"
-
-# fastembed: BLOCKED — corenn-kernels (nightly-only, #![feature(f16)])
-# Embedding generation deferred to Phase B. Pipeline stubs with 384-dim placeholder.
-# Phase B will implement via candle + local ONNX model or alternative stable crate.

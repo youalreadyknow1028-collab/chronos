@@ -3,6 +3,7 @@ import { BrainPulseDashboard } from "../BrainPulseDashboard/BrainPulseDashboard"
 import { GraphView } from "../GraphView/GraphView";
 import { TimelineView } from "../TimelineView/TimelineView";
 import { SynergyStream } from "../SynergyStream/SynergyStream";
+import { Settings } from "../Settings/Settings";
 import { getHealth } from "../../hooks/useTauri";
 import type { HealthStatus } from "../../types/chronos";
 
@@ -12,6 +13,7 @@ export function AppShell() {
   const [activeView, setActiveView] = useState<View>("graph");
   const [health, setHealth] = useState<HealthStatus | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [showSettings, setShowSettings] = useState(false);
 
   useEffect(() => {
     getHealth().then(setHealth).catch(() => {});
@@ -65,6 +67,21 @@ export function AppShell() {
               {sidebarOpen && <span>{item.label}</span>}
             </button>
           ))}
+
+          {/* Settings button */}
+          <div className="px-4 pt-2 mt-2 border-t border-border">
+            <button
+              onClick={() => setShowSettings(true)}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 text-sm rounded-lg transition-colors ${
+                showSettings
+                  ? "bg-primary/10 text-primary"
+                  : "text-muted-foreground hover:bg-card-hover hover:text-foreground"
+              }`}
+            >
+              <span className="text-lg">⚙️</span>
+              {sidebarOpen && <span>Settings</span>}
+            </button>
+          </div>
         </nav>
 
         {/* Health indicators */}
@@ -107,6 +124,12 @@ export function AppShell() {
           {activeView === "insights" && <SynergyStream />}
         </div>
       </main>
+
+      {/* Settings Modal */}
+      <Settings
+        isOpen={showSettings}
+        onClose={() => setShowSettings(false)}
+      />
     </div>
   );
 }
