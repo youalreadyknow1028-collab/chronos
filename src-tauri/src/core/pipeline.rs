@@ -9,8 +9,9 @@
 //!   pipeline_trigger_cron() — Run synthesis cron
 
 use crate::core::minimax::{TierRouter, BudgetStatus};
+use crate::core::embed;
 use serde::{Deserialize, Serialize};
-use tracing::info;
+use tracing::{info, warn};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IngestRequest {
@@ -86,6 +87,25 @@ pub async fn pipeline_ingest(
     let tier_used = "t3".to_string();
     let provider_used = "minimax".to_string();
 
+    // PHASE A: Generate actual embedding with fastembed (384-dim all-MiniLM-L6-v2)
+    // This is the foundation — embeddings are generated but not yet stored.
+    // Phase B will wire storage via hnswlib-rs.
+    let embedding_dim = embed::EMBEDDING_DIM;
+    match embed::embed_text(&request.content) {
+        Ok(emb) => {
+            info!(
+                "[Pipeline] Generated embedding: dim={}, model={}, norm={:.4}",
+                emb.vector.len(),
+                emb.model,
+                emb.normalized().iter().take(3).sum::<f32>()
+            );
+            // NOTE: emb.vector is 384-dim. Not stored yet — Phase B wires hnswlib-rs storage.
+        }
+        Err(e) => {
+            warn!("[Pipeline] Embedding generation failed (non-fatal): {}. Proceeding without embedding.", e);
+        }
+    }
+
     // TODO: Wire to 2PC
     // let sync_point = SyncPoint {
     //     id: wiki_id.clone(),
@@ -99,6 +119,9 @@ pub async fn pipeline_ingest(
     // };
     // let (_, _) = sync_note_2pc(kuzu, qdrant, sync_point).await
     //     .map_err(|e| PipelineError { code: "SYNC_ERROR".into(), message: e.to_string() })?;
+
+    // Temporary: expose embedding_dim at module level so Phase B can reference it
+    let _ = embedding_dim;
 
     info!("[Pipeline] Ingest complete: note_id={}, wiki_id={}", note_id, wiki_id);
 

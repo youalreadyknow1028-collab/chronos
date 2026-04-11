@@ -28,3 +28,13 @@ zeroize = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
+
+# === Phase A: Embedded AI Stack ===
+# lancedb: Serverless embedded vector DB (Rust-native, no server)
+# Supports 384-dim vectors natively. Edition 2024 requires rust 1.91+ (met: 1.94.1).
+# Note: hnswlib-rs was blocked — pulls corenn-kernels which requires nightly Rust.
+lancedb = "0.27"
+
+# fastembed: BLOCKED — corenn-kernels (nightly-only, #![feature(f16)])
+# Embedding generation deferred to Phase B. Pipeline stubs with 384-dim placeholder.
+# Phase B will implement via candle + local ONNX model or alternative stable crate.
