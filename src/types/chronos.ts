@@ -63,6 +63,7 @@ export interface BudgetStatus {
   minimax_tokens: number;
   minimax_tokens_limit: number;
   gemini_calls: number;
+  gemini_calls_limit: number;
   gemini_tokens: number;
   gemini_tokens_limit: number;
 }

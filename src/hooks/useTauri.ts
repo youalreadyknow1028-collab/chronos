@@ -6,6 +6,7 @@ import type {
   DiaryWriteRequest,
   DiaryWriteResponse,
   BudgetStatus,
+  CronRunResult,
   EntryStatus,
   GraphData,
   TimelineEntry,
