@@ -2,6 +2,7 @@ pub mod core;
 
 use dirs;
 use std::sync::OnceLock;
+use tauri::Manager;
 use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
