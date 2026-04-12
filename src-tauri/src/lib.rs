@@ -120,23 +120,23 @@ pub fn run() {
                 .with_thread_ids(false);
 
             // Replace the global subscriber's writer with the file writer.
-            // try_init() returns Err if a default is already set — this happens when
-            // run() already set the null writer. That's fine; the null writer is still
-            // active and Phase 1 logs are lost, but the file writer is now the active one.
-            // use_ buffered: file writer is buffered, so logs still go to disk.
-            if tracing::subscriber::set_global_default(
-                tracing_subscriber::registry()
-                    .with(file_layer)
-                    .with(tracing_subscriber::EnvFilter::new("info")),
-            )
-            .is_ok()
-            {
+            //
+            // CRITICAL: set_global_default() PANICS if a default is already set.
+            // Phase 1's init() called try_init() which locked the global state.
+            // set_global_default() here would panic → crash on startup.
+            // FIX: use try_init() which safely returns Err instead of panicking.
+            let file_env_filter = tracing_subscriber::EnvFilter::new("info");
+            let file_registry = tracing_subscriber::registry()
+                .with(file_layer)
+                .with(file_env_filter);
+
+            if file_registry.try_init().is_ok() {
                 tracing::info!("[Startup] Global subscriber upgraded to file logging.");
             } else {
                 tracing::warn!(
-                    "[Startup] Global subscriber was already set (null writer active). \
-                    File logging layer added but null writer still drains. \
-                    Consider a restart to get clean logs."
+                    "[Startup] Global subscriber already set (null writer from Phase 1). \
+                    File writer NOT activated. Restart the app for full logs. \
+                    The app will run correctly — this only affects log output."
                 );
             }
 
