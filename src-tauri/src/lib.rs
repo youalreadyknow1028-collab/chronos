@@ -17,7 +17,7 @@ pub fn run() {
         .join("logs");
     std::fs::create_dir_all(&log_dir).ok();
     let file_appender = RollingFileAppender::new(Rotation::DAILY, &log_dir, "chronos.log");
-    let (_non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+    let (non_blocking, guard) = tracing_appender::non_blocking(file_appender);
     // Leak the guard so logging works for the entire lifetime of the app.
     let _ = LOG_GUARD.set(guard);
 
