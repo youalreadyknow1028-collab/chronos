@@ -8,6 +8,7 @@ use arrow_array::{
     FixedSizeListArray, Int64Array, RecordBatch, StringArray,
 };
 use arrow_schema::DataType;
+use dirs;
 use futures::TryStreamExt;
 use lancedb::{
     connection::Connection,
@@ -17,7 +18,6 @@ use lancedb::{
 use std::sync::OnceLock;
 use tracing::info;
 
-const LANCE_DB_DIR: &str = ".chronos/vectordb";
 const TABLE_NAME: &str = "embeddings";
 
 static LANCE_CONN: OnceLock<Connection> = OnceLock::new();
@@ -32,19 +32,27 @@ pub struct EmbedRecord {
     pub created_at: i64,
 }
 
+fn get_lance_db_dir() -> std::path::PathBuf {
+    dirs::data_local_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("chronos")
+        .join("vectordb")
+}
+
 pub fn init_lance() -> Result<(), LanceError> {
     if LANCE_CONN.get().is_some() {
         return Ok(());
     }
 
-    std::fs::create_dir_all(LANCE_DB_DIR)
-        .map_err(|e| LanceError::InitFailed(format!("create dir failed: {}", e)))?;
+    let db_dir = get_lance_db_dir();
+    std::fs::create_dir_all(&db_dir)
+        .map_err(|e| LanceError::InitFailed(format!("create dir failed: {}: {}", db_dir.display(), e)))?;
 
     let rt = tokio::runtime::Handle::current();
 
     // Connect: connect() → ConnectBuilder → .execute() → Connection
     let conn: Connection = rt
-        .block_on(connect(LANCE_DB_DIR).execute())
+        .block_on(connect(db_dir.to_string_lossy().as_ref()).execute())
         .map_err(|e| LanceError::InitFailed(format!("connect() failed: {}", e)))?;
 
     let _ = LANCE_CONN.set(conn);
@@ -52,7 +60,7 @@ pub fn init_lance() -> Result<(), LanceError> {
     // Create table if not exists
     create_table_if_not_exists()?;
 
-    info!("[LanceDB] Initialized at {}", LANCE_DB_DIR);
+    info!("[LanceDB] Initialized at {}", db_dir.display());
     Ok(())
 }
 

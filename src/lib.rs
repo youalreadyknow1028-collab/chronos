@@ -1,10 +1,16 @@
 pub mod core;
 
+use dirs;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 
 pub fn run() {
-    let log_dir = std::env::current_dir().unwrap_or_default().join("logs");
+    // v0.2.1 hotfix: Use OS AppData directory instead of current working directory
+    // This prevents permission crashes on Windows when installed in Program Files
+    let log_dir = dirs::data_local_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("chronos")
+        .join("logs");
     std::fs::create_dir_all(&log_dir).ok();
     let file_appender = RollingFileAppender::new(Rotation::DAILY, &log_dir, "chronos.log");
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
