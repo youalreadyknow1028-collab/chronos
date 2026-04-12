@@ -22,9 +22,9 @@ jobs:
           - platform: ubuntu-latest
             args: ''
             target: x86_64-unknown-linux-gnu
-          - platform: macos-latest
-            args: '--target x86_64-apple-darwin'
-            target: x86_64-apple-darwin
+          # NOTE: macOS x86_64 removed — lance-encoding requires AVX-512 CPU SIMD,
+          # which the GitHub Actions x86_64 macOS runner doesn't support.
+          # Apple Silicon (ARM64) builds work fine.
           - platform: macos-latest
             args: '--target aarch64-apple-darwin'
             target: aarch64-apple-darwin
