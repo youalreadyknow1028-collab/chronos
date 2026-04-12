@@ -16,6 +16,8 @@ pub enum MiniMaxError {
     ParseError(String),
     #[error("Budget exhausted")]
     BudgetExhausted,
+    #[error("Client build failed: {0}")]
+    ClientBuildFailed(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,15 +62,15 @@ pub struct MiniMaxClient {
 }
 
 impl MiniMaxClient {
-    pub fn new(config: MiniMaxConfig) -> Self {
+    pub fn new(config: MiniMaxConfig) -> Result<Self, MiniMaxError> {
         let http_client = reqwest::Client::builder()
             .timeout(Duration::from_secs(config.timeout_secs))
             .build()
-            .expect("reqwest client must build");
-        Self { config, http_client }
+            .map_err(|e| MiniMaxError::ClientBuildFailed(e.to_string()))?;
+        Ok(Self { config, http_client })
     }
 
-    pub fn with_default() -> Self {
+    pub fn with_default() -> Result<Self, MiniMaxError> {
         Self::new(t4_minimax_config())
     }
 

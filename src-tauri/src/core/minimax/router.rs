@@ -49,16 +49,38 @@ impl TierState {
 }
 
 pub struct TierRouter {
-    minimax: MiniMaxClient,
-    gemini: GeminiClient,
+    minimax: Option<MiniMaxClient>,
+    gemini: Option<GeminiClient>,
     budget: Arc<Mutex<BudgetState>>,
 }
 
 impl TierRouter {
     pub fn new() -> Self {
+        let minimax = match MiniMaxClient::with_default() {
+            Ok(c) => {
+                tracing::info!("[Router] MiniMax client initialized.");
+                Some(c)
+            }
+            Err(e) => {
+                tracing::warn!("[Router] MiniMax client failed to initialize: {}. API calls will fail.", e);
+                None
+            }
+        };
+
+        let gemini = match GeminiClient::new(t3_gemini_config()) {
+            Ok(c) => {
+                tracing::info!("[Router] Gemini client initialized.");
+                Some(c)
+            }
+            Err(e) => {
+                tracing::warn!("[Router] Gemini client failed to initialize: {}. Gemini fallback will be unavailable.", e);
+                None
+            }
+        };
+
         Self {
-            minimax: MiniMaxClient::with_default(),
-            gemini: GeminiClient::new(t3_gemini_config()),
+            minimax,
+            gemini,
             budget: Arc::new(Mutex::new(BudgetState::new())),
         }
     }
@@ -150,11 +172,13 @@ impl TierRouter {
     }
 
     async fn call_minimax(&self, messages: Vec<Message>) -> Result<String, TierError> {
-        let estimated = self.minimax.estimate_tokens(&messages);
+        let client = self.minimax.as_ref()
+            .ok_or_else(|| TierError::ProviderError("MiniMax client not initialized (reqwest failed to build)".into()))?;
+        let estimated = client.estimate_tokens(&messages);
         let mut guard = CallGuard::reserve_minimax(self.budget.clone(), estimated).await
             .map_err(|e| TierError::BudgetError(e))?;
 
-        let response = self.minimax
+        let response = client
             .chat(messages.clone(), None, None)
             .await
             .map_err(|e| TierError::ProviderError(e.to_string()))?;
@@ -171,7 +195,8 @@ impl TierRouter {
 
     async fn call_minimax_t3(&self, messages: Vec<Message>) -> Result<String, TierError> {
         // T3 uses lighter config
-        let minimax_t3 = MiniMaxClient::new(t3_minimax_config());
+        let minimax_t3 = MiniMaxClient::new(t3_minimax_config())
+            .map_err(|e| TierError::ProviderError(format!("MiniMax T3 client init failed: {}", e)))?;
         let estimated = minimax_t3.estimate_tokens(&messages);
         
         let mut guard = CallGuard::reserve_minimax(self.budget.clone(), estimated).await
@@ -189,11 +214,13 @@ impl TierRouter {
     }
 
     async fn call_minimax_max(&self, messages: Vec<Message>) -> Result<String, TierError> {
-        let estimated = self.minimax.estimate_tokens(&messages);
+        let client = self.minimax.as_ref()
+            .ok_or_else(|| TierError::ProviderError("MiniMax client not initialized (reqwest failed to build)".into()))?;
+        let estimated = client.estimate_tokens(&messages);
         let mut guard = CallGuard::reserve_minimax(self.budget.clone(), estimated).await
             .map_err(|e| TierError::BudgetError(e))?;
 
-        let response = self.minimax
+        let response = client
             .chat(messages, Some(0.7), Some(8192))
             .await
             .map_err(|e| TierError::ProviderError(e.to_string()))?;
@@ -205,7 +232,9 @@ impl TierRouter {
     }
 
     async fn call_gemini(&self, prompt: String) -> Result<String, TierError> {
-        let (text, tokens) = self.gemini
+        let client = self.gemini.as_ref()
+            .ok_or_else(|| TierError::ProviderError("Gemini client not initialized (reqwest failed to build)".into()))?;
+        let (text, tokens) = client
             .generate(prompt, Some(2048), Some(0.5))
             .await
             .map_err(|e| TierError::ProviderError(e.to_string()))?;

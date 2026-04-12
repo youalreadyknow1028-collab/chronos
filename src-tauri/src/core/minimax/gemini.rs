@@ -14,6 +14,8 @@ pub enum GeminiError {
     ApiError(String),
     #[error("Parse error: {0}")]
     ParseError(String),
+    #[error("Client build failed: {0}")]
+    ClientBuildFailed(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,12 +73,12 @@ pub struct GeminiClient {
 }
 
 impl GeminiClient {
-    pub fn new(config: GeminiConfig) -> Self {
+    pub fn new(config: GeminiConfig) -> Result<Self, GeminiError> {
         let http_client = reqwest::Client::builder()
             .timeout(Duration::from_secs(config.timeout_secs))
             .build()
-            .expect("reqwest client must build");
-        Self { config, http_client }
+            .map_err(|e| GeminiError::ClientBuildFailed(e.to_string()))?;
+        Ok(Self { config, http_client })
     }
 
     pub async fn generate(

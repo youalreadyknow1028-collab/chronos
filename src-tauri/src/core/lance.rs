@@ -44,29 +44,35 @@ fn get_lance_db_dir() -> std::path::PathBuf {
         .join("vectordb")
 }
 
-pub fn init_lance() -> Result<(), LanceError> {
+/// Initialize LanceDB at an explicit path (used by .setup() with Tauri's app data dir).
+/// The parent dir is used as: parent_dir/chronos/vectordb
+pub fn init_lance_with_path(app_data_dir: &std::path::Path) -> Result<(), LanceError> {
     if LANCE_CONN.get().is_some() {
         return Ok(());
     }
 
-    let db_dir = get_lance_db_dir();
+    let db_dir = app_data_dir.join("chronos").join("vectordb");
     std::fs::create_dir_all(&db_dir)
         .map_err(|e| LanceError::InitFailed(format!("create dir failed: {}: {}", db_dir.display(), e)))?;
 
     let rt = tokio::runtime::Handle::current();
 
-    // Connect: connect() → ConnectBuilder → .execute() → Connection
     let conn: Connection = rt
         .block_on(connect(db_dir.to_string_lossy().as_ref()).execute())
         .map_err(|e| LanceError::InitFailed(format!("connect() failed: {}", e)))?;
 
     let _ = LANCE_CONN.set(conn);
 
-    // Create table if not exists
     create_table_if_not_exists()?;
 
     info!("[LanceDB] Initialized at {}", db_dir.display());
     Ok(())
+}
+
+/// Legacy init that uses dirs::data_local_dir() — prefer init_lance_with_path().
+pub fn init_lance() -> Result<(), LanceError> {
+    let base = dirs::data_local_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+    init_lance_with_path(&base)
 }
 
 fn create_table_if_not_exists() -> Result<(), LanceError> {
