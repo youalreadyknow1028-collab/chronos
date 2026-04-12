@@ -3,33 +3,213 @@ pub mod core;
 use std::sync::OnceLock;
 use tauri::Manager;
 use tracing_appender::non_blocking::WorkerGuard;
-use tracing_subscriber::fmt::writer::MakeWriterExt;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Guards the tracing non-blocking worker thread for the entire app lifetime.
 /// MUST be kept alive or the logging thread dies and writes panic.
+/// Phase 1: guard for null writer (no logging)
+/// Phase 2: guard for file writer (logs to file)
 static LOG_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
 
-pub fn run() {
-    // Phase 1: Re-route stderr → /dev/null so no console window flashes on Windows.
-    // The working directory might be C:\Program Files (MSI install) — do NOT write
-    // any files here. All logging goes to a null writer until .setup() runs.
+/// Phase 1: Run BEFORE Tauri is initialized.
+/// Sets up a null writer so no console window flashes on Windows.
+/// Does NOT set a global tracing default — Phase 2 handles that.
+fn init_phase1_logging() {
+    // null_writer → non_blocking → LOG_GUARD
     let null_writer = std::io::sink();
     let (non_blocking, guard) = tracing_appender::non_blocking(null_writer);
+
+    // If this fails, the null guard goes out of scope immediately.
+    // The non_blocking worker thread dies. That's fine — Phase 1 is brief.
     let _ = LOG_GUARD.set(guard);
 
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::fmt::layer()
-                .with_writer(non_blocking)
-                .with_ansi(false),
-        )
+    // Build the null-writer subscriber but do NOT set it as global.
+    // We store it in a thread-local so Phase 2 can build on top of it.
+    let null_layer = tracing_subscriber::fmt::layer()
+        .with_writer(non_blocking)
+        .with_ansi(false)
+        .with_target(false);
+
+    // Use try_init() — on first run: succeeds, global is set to null writer.
+    // On restart within same process: fails, global stays from previous Phase 2 (never happens in practice).
+    let _ = tracing_subscriber::registry()
+        .with(null_layer)
         .with(tracing_subscriber::EnvFilter::new("info"))
-        .init();
+        .try_init();
 
-    tracing::info!("Chronos starting up (logging suspended until AppData ready)...");
+    // NOTE: any log lines before this point are silently discarded.
+    // The null writer is fine — we have no writable path yet.
+}
 
-    tauri::Builder::default()
+/// Phase 2: Run INSIDE Tauri .setup() closure.
+/// Has access to app.path() for guaranteed-writable directories.
+/// Sets the global tracing default to use the file writer.
+fn init_phase2_logging(app: &tauri::App) {
+    use tracing_appender::non_blocking::NonBlocking;
+    use tracing_subscriber::fmt::writer::MakeWriterExt;
+
+    // ── Get log directory — NEVER use cwd ──────────────────────────────────────
+    // Priority: app_log_dir() > app_local_data_dir()/logs > temp_dir
+    let log_dir = app
+        .path()
+        .app_log_dir()
+        .ok()
+        .or_else(|| {
+            app.path()
+                .app_local_data_dir()
+                .ok()
+                .map(|p| p.join("logs"))
+        })
+        .unwrap_or_else(|| std::env::temp_dir().join("chronos-logs"));
+
+    // Create log dir — fail gracefully, never crash.
+    let log_dir = match std::fs::create_dir_all(&log_dir) {
+        Ok(()) => {
+            tracing::info!("[Startup] Log dir ready: {}", log_dir.display());
+            log_dir
+        }
+        Err(e) => {
+            // Last resort: temp dir is always writable.
+            let fallback = std::env::temp_dir().join("chronos-logs");
+            let _ = std::fs::create_dir_all(&fallback);
+            tracing::warn!(
+                "[Startup] Cannot create log dir {}: {}. \
+                Falling back to {}. Report this bug.",
+                log_dir.display(),
+                e,
+                fallback.display()
+            );
+            fallback
+        }
+    };
+
+    // ── Build file appender (daily rotation, writes ONLY to AppData) ────────────
+    use tracing_appender::rolling::{RollingFileAppender, Rotation};
+    let file_appender = RollingFileAppender::new(Rotation::DAILY, &log_dir, "chronos.log");
+    let (file_writer, file_guard) = tracing_appender::non_blocking(file_appender);
+
+    // Store the file guard — keeps the logging worker thread alive for the app's lifetime.
+    // If this fails, the old guard is still active. That's fine for logging purposes.
+    let _old_guard = LOG_GUARD.replace(file_guard);
+
+    // ── Set global tracing default with file writer ─────────────────────────────
+    // try_init() is safe here:
+    // - First run: Phase 1 set null writer as global → try_init() returns Err.
+    //   We then use set_global_default() → succeeds, null writer replaced.
+    // - Restart (never happens in same process): try_init() returns Err.
+    //   set_global_default() → succeeds, previous global replaced.
+    // - If Phase 1 ever calls init()/set_global_default() instead of try_init():
+    //   try_init() fails → set_global_default() is NOT called → no panic.
+    let file_layer = tracing_subscriber::fmt::layer()
+        .with_writer(file_writer)
+        .with_ansi(false)
+        .with_target(true)
+        .with_thread_ids(false);
+
+    let file_env_filter = tracing_subscriber::EnvFilter::new("info");
+    let file_registry = tracing_subscriber::registry()
+        .with(file_layer)
+        .with(file_env_filter);
+
+    if file_registry.try_init().is_err() {
+        // A global default already exists (from Phase 1's try_init()).
+        // Replace it with the file writer.
+        tracing::subscriber::set_global_default(file_registry)
+            .expect("set_global_default must succeed when try_init() returned Err");
+        tracing::info!(
+            "[Startup] Global subscriber upgraded to file logging (overrode null writer)."
+        );
+    } else {
+        tracing::info!("[Startup] Global subscriber set to file logging.");
+    }
+
+    tracing::info!(
+        "[Startup] File logging active: {}/chronos-YYYY-MM-DD.log",
+        log_dir.display()
+    );
+}
+
+/// Phase 3: Initialize databases at proper AppData locations.
+fn init_phase3_databases(app: &tauri::App) {
+    // ── Get app data directory — NEVER use cwd ─────────────────────────────────
+    // Windows: %LOCALAPPDATA%\com.chronos.app\  (writable per-user, NOT Program Files)
+    // Linux:   ~/.local/share/com.chronos.app/
+    // macOS:   ~/Library/Application Support/com.chronos.app/
+    let data_dir = app
+        .path()
+        .app_local_data_dir()
+        .unwrap_or_else(|_| {
+            dirs::data_local_dir().unwrap_or_else(|| {
+                let fallback = std::env::temp_dir().join("chronos-appdata");
+                tracing::warn!(
+                    "[Startup] No app data dir available. Using temp dir {}. \
+                    Data will NOT persist across reboots.",
+                    fallback.display()
+                );
+                fallback
+            })
+        });
+
+    tracing::info!("[Startup] App data dir: {}", data_dir.display());
+
+    // CRITICAL: Tauri v2's app_local_data_dir() returns the path but does NOT
+    // create it. On first boot the folder doesn't exist. Without explicit create,
+    // all subsequent DB writes fail silently — this was a root cause of the crash.
+    if let Err(e) = std::fs::create_dir_all(&data_dir) {
+        // Write to a fallback file so we have SOME diagnostic if this fails.
+        let crash_path = std::env::temp_dir().join("chronos-startup-error.txt");
+        let msg = format!(
+            "[{}] FATAL: Cannot create app data dir {}: {}\n",
+            chrono::Utc::now(),
+            data_dir.display(),
+            e
+        );
+        let _ = std::fs::write(&crash_path, &msg);
+        tracing::error!(
+            "[Startup] CANNOT create app data dir {}: {}. \
+            LanceDB and all persistent storage will be unavailable.",
+            data_dir.display(),
+            e
+        );
+        // DO NOT early-return — let IPC handlers report their own errors.
+        // The user will see empty graph/insights rather than a silent crash.
+    } else {
+        tracing::info!("[Startup] App data dir created/verified OK.");
+    }
+
+    // ── LanceDB vector store ───────────────────────────────────────────────────
+    // Stores at: data_dir/chronos/vectordb/
+    // Safe to fail: vault searches return empty gracefully.
+    if let Err(e) = core::lance::init_lance_with_path(&data_dir) {
+        tracing::warn!(
+            "[Startup] LanceDB init failed: {}. Vector storage unavailable.",
+            e
+        );
+    }
+
+    // ── Candle embedder (local ML) ─────────────────────────────────────────────
+    // Model cached at: ~/.cache/huggingface/ (writable, managed by hf-hub).
+    // Safe to fail: ingest falls back gracefully.
+    if let Err(e) = core::embed::init_embedder() {
+        tracing::warn!(
+            "[Startup] Candle embedder init failed: {}. Embeddings unavailable.",
+            e
+        );
+    }
+
+    // NOTE: KuzuDB and Qdrant are stub implementations in this build.
+    tracing::info!("Chronos Tauri setup complete — all systems reporting.");
+}
+
+pub fn run() {
+    // ── Phase 1: Null logging — no files written, no cwd dependency ───────────
+    // The working directory on Windows (MSI install) is C:\Program Files\ — read-only.
+    // We cannot write any files until we have a guaranteed-writable path from Tauri.
+    init_phase1_logging();
+
+    tracing::info!("Chronos starting up...");
+
+    // ── Tauri Builder ─────────────────────────────────────────────────────────
+    let result = tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             // === Health ===
             core::ipc::health::health_check,
@@ -57,159 +237,37 @@ pub fn run() {
         .setup(|app| {
             tracing::info!("Chronos Tauri setup starting...");
 
-            // ── Phase 2: Upgrade to file logging using Tauri's guaranteed paths ──
-            //
-            // The null writer from Phase 1 is still active. We now have app.path()
-            // available, so switch to a file writer at a guaranteed-writable path.
-            //
-            // Get log directory — NEVER use cwd (might be C:\Program Files).
-            // Priority: app_log_dir() > app_local_data_dir()/logs > temp_dir
-            let log_dir = app
-                .path()
-                .app_log_dir()
-                .ok()
-                .or_else(|| {
-                    app.path()
-                        .app_local_data_dir()
-                        .ok()
-                        .map(|p| p.join("logs"))
-                })
-                .unwrap_or_else(|| std::env::temp_dir().join("chronos-logs"));
+            // ── Phase 2: Switch to file logging (AppData paths now available) ──
+            init_phase2_logging(app);
 
-            // Create log dir — fail gracefully, never crash.
-            let log_dir = match std::fs::create_dir_all(&log_dir) {
-                Ok(()) => {
-                    tracing::info!("[Startup] Log dir ready: {}", log_dir.display());
-                    log_dir
-                }
-                Err(e) => {
-                    // Last resort: temp dir is always writable.
-                    let fallback = std::env::temp_dir().join("chronos-logs");
-                    let _ = std::fs::create_dir_all(&fallback);
-                    tracing::warn!(
-                        "[Startup] Cannot create log dir {}: {}. \
-                        Falling back to {}. Report this bug.",
-                        log_dir.display(),
-                        e,
-                        fallback.display()
-                    );
-                    fallback
-                }
-            };
+            // ── Phase 3: Initialize databases at AppData locations ─────────────
+            init_phase3_databases(app);
 
-            // Build file appender — daily rotation, writes ONLY to AppData (never cwd).
-            use tracing_appender::rolling::{RollingFileAppender, Rotation};
-            let file_appender = RollingFileAppender::new(Rotation::DAILY, &log_dir, "chronos.log");
-            let (file_writer, file_guard) = tracing_appender::non_blocking(file_appender);
-
-            // Store the guard. If this fails, the null writer from Phase 1 stays active.
-            // That's non-ideal (no logs to file) but never crashes.
-            if LOG_GUARD.set(file_guard).is_err() {
-                tracing::warn!(
-                    "[Startup] LOG_GUARD already set — file logging may not activate. \
-                    This is a programming error if you see it."
-                );
-            }
-
-            // Replace the global subscriber's writer with the file writer.
-            // Safe during setup: no concurrent logging yet (app just started).
-            let file_layer = tracing_subscriber::fmt::layer()
-                .with_writer(file_writer)
-                .with_ansi(false)
-                .with_target(true)
-                .with_thread_ids(false);
-
-            // Replace the global subscriber's writer with the file writer.
-            //
-            // CRITICAL: set_global_default() PANICS if a default is already set.
-            // Phase 1's init() called try_init() which locked the global state.
-            // set_global_default() here would panic → crash on startup.
-            // FIX: use try_init() which safely returns Err instead of panicking.
-            let file_env_filter = tracing_subscriber::EnvFilter::new("info");
-            let file_registry = tracing_subscriber::registry()
-                .with(file_layer)
-                .with(file_env_filter);
-
-            if file_registry.try_init().is_ok() {
-                tracing::info!("[Startup] Global subscriber upgraded to file logging.");
-            } else {
-                tracing::warn!(
-                    "[Startup] Global subscriber already set (null writer from Phase 1). \
-                    File writer NOT activated. Restart the app for full logs. \
-                    The app will run correctly — this only affects log output."
-                );
-            }
-
-            tracing::info!(
-                "[Startup] File logging active: {}/chronos-$(date).log",
-                log_dir.display()
-            );
-
-            // ── Phase 3: Initialise databases at proper AppData locations ──
-
-            // Get app data directory — NEVER use cwd.
-            // Windows: %LOCALAPPDATA%\com.chronos.app\  (writable per-user, NOT Program Files)
-            // Linux:   ~/.local/share/com.chronos.app/
-            // macOS:   ~/Library/Application Support/com.chronos.app/
-            let data_dir = app
-                .path()
-                .app_local_data_dir()
-                .unwrap_or_else(|_| {
-                    dirs::data_local_dir().unwrap_or_else(|| {
-                        // FINAL fallback — temp is always writable but not persistent.
-                        // If this is reached, app data is lost on reboot.
-                        tracing::warn!(
-                            "[Startup] No app data dir available. Using temp dir. \
-                            Data will NOT persist across reboots."
-                        );
-                        std::env::temp_dir().join("chronos-appdata")
-                    })
-                });
-
-            tracing::info!("[Startup] App data dir: {}", data_dir.display());
-
-            // CRITICAL: Tauri v2's app_local_data_dir() RETURNS the path but does NOT
-            // create it. On first boot the folder doesn't exist. Without explicit create,
-            // all subsequent DB writes silently fail and the window closes immediately.
-            if let Err(e) = std::fs::create_dir_all(&data_dir) {
-                tracing::error!(
-                    "[Startup] CANNOT create app data dir {}: {}. \
-                    LanceDB and all persistent storage will be unavailable.",
-                    data_dir.display(),
-                    e
-                );
-                // DO NOT early-return — let the IPC handlers report their own errors.
-                // The user will see empty graph/insights which is better than silent crash.
-            } else {
-                tracing::info!("[Startup] App data dir created/verified OK.");
-            }
-
-            // ── LanceDB vector store ──
-            // Stores at: app_data_dir/chronos/vectordb/
-            // Safe to fail: vault searches return empty, graph shows no nodes.
-            if let Err(e) = core::lance::init_lance_with_path(&data_dir) {
-                tracing::warn!(
-                    "[Startup] LanceDB init failed: {}. Vector storage unavailable.",
-                    e
-                );
-            }
-
-            // ── Candle embedder (local ML) ──
-            // Model cached at: ~/.cache/huggingface/ (writable, managed by hf-hub crate).
-            // Safe to fail: ingest falls back to no embeddings.
-            if let Err(e) = core::embed::init_embedder() {
-                tracing::warn!(
-                    "[Startup] Candle embedder init failed: {}. Embeddings unavailable.",
-                    e
-                );
-            }
-
-            // NOTE: KuzuDB and Qdrant are stub implementations in this build.
-            // Graph and advanced search are not yet wired up — safe to ignore.
-
-            tracing::info!("Chronos Tauri setup complete — all systems reporting.");
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .run(tauri::generate_context!());
+
+    // ── Error handling — write crash diagnostics to file before exiting ─────────
+    // On Windows, .expect() would panic with no visible output.
+    // This writes the error to a temp file so we have a diagnostic.
+    match result {
+        Ok(()) => {
+            tracing::info!("Chronos exited cleanly.");
+        }
+        Err(e) => {
+            let crash_path = std::env::temp_dir().join("chronos-fatal.txt");
+            let msg = format!(
+                "[{}] CHRONOS FATAL ERROR:\n{:?}\n\n\
+                If you're seeing this, please share this file with the developers.\n\
+                Log file (if file logging activated): %LOCALAPPDATA%\\com.chronos.app\\logs\\\n",
+                chrono::Utc::now(),
+                e
+            );
+            // Try to write the crash file, but don't crash trying to report the crash.
+            let _ = std::fs::write(&crash_path, &msg);
+            // Also try stderr — useful for debugging via command line.
+            eprintln!("{}", msg);
+            std::process::exit(1);
+        }
+    }
 }

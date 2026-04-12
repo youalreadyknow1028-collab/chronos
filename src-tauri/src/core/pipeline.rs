@@ -98,12 +98,15 @@ pub async fn pipeline_ingest(
                 emb.vector.len(),
                 emb.model
             );
-            // Verify 384-dim
-            assert_eq!(
-                emb.vector.len(),
-                384,
-                "all-MiniLM-L6-v2 must produce 384-dim vectors"
-            );
+            // Verify 384-dim — fail gracefully instead of panicking
+            if emb.vector.len() != 384 {
+                warn!(
+                    "[Pipeline] Embedding dim mismatch: got {} expected 384. \
+                    Skipping embedding for this chunk.",
+                    emb.vector.len()
+                );
+                return Ok(None);
+            }
             Some(emb)
         }
         Err(e) => {
