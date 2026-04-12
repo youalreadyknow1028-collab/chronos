@@ -74,6 +74,20 @@ pub fn run() {
 
             tracing::info!("[Startup] App data dir: {}", data_dir.display());
 
+            // CRITICAL: Create the app data directory before any database init.
+            // Tauri v2's app_local_data_dir() returns the path but does NOT create it.
+            // On first boot the folder doesn't exist — without this, DB init silently fails.
+            if let Err(e) = std::fs::create_dir_all(&data_dir) {
+                tracing::error!(
+                    "[Startup] FAILED to create app data dir {}: {}. App may not function.",
+                    data_dir.display(),
+                    e
+                );
+                // Continue anyway — let the DB init report its own error
+            } else {
+                tracing::info!("[Startup] App data dir created/verified.");
+            }
+
             // Initialize LanceDB at the proper AppData location
             if let Err(e) = core::lance::init_lance_with_path(&data_dir) {
                 tracing::warn!(
