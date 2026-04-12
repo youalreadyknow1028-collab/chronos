@@ -1,13 +1,25 @@
 pub mod core;
 
+use dirs;
+use std::sync::OnceLock;
+use tracing_appender::non_blocking::WorkerGuard;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use tracing_appender::rolling::{RollingFileAppender, Rotation};
 
+static LOG_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
+
 pub fn run() {
-    let log_dir = std::env::current_dir().unwrap_or_default().join("logs");
+    // v0.2.1 hotfix: Use OS AppData directory instead of current working directory.
+    // This prevents permission crashes on Windows when installed in Program Files.
+    let log_dir = dirs::data_local_dir()
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+        .join("chronos")
+        .join("logs");
     std::fs::create_dir_all(&log_dir).ok();
     let file_appender = RollingFileAppender::new(Rotation::DAILY, &log_dir, "chronos.log");
-    let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+    let (_non_blocking, guard) = tracing_appender::non_blocking(file_appender);
+    // Leak the guard so logging works for the entire lifetime of the app.
+    let _ = LOG_GUARD.set(guard);
 
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer().with_writer(non_blocking))
