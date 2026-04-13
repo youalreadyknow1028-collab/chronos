@@ -1,6 +1,5 @@
 pub mod core;
 
-use std::mem::ManuallyDrop;
 use std::sync::OnceLock;
 use tauri::Manager;
 use tracing_appender::non_blocking::WorkerGuard;
@@ -111,7 +110,9 @@ fn init_phase2_logging(app: &tauri::App) {
         .with(file_layer)
         .with(file_env_filter);
 
-    if file_registry.try_init().is_err() {
+    // try_init() consumes self, so clone first — one clone goes to try_init(),
+    // the other stays for set_global_default() in the error branch.
+    if file_registry.clone().try_init().is_err() {
         // A global default already exists (from Phase 1's try_init()).
         // Replace it with the file writer.
         tracing::subscriber::set_global_default(file_registry)
