@@ -1,5 +1,6 @@
 pub mod core;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use tauri::Manager;
 use tracing_appender::non_blocking::WorkerGuard;
@@ -10,6 +11,10 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 /// Phase 1: guard for null writer (no logging)
 /// Phase 2: guard for file writer (logs to file)
 static LOG_GUARD: OnceLock<WorkerGuard> = OnceLock::new();
+
+/// Tracks whether Phase 1 successfully claimed the global tracing default.
+/// Used by Phase 2 to choose the correct init path.
+static PHASE1_GLOBAL_SET: AtomicBool = AtomicBool::new(false);
 
 /// Phase 1: Run BEFORE Tauri is initialized.
 /// Sets up a null writer so no console window flashes on Windows.
@@ -30,12 +35,13 @@ fn init_phase1_logging() {
         .with_ansi(false)
         .with_target(false);
 
-    // Use try_init() — on first run: succeeds, global is set to null writer.
-    // On restart within same process: fails, global stays from previous Phase 2 (never happens in practice).
-    let _ = tracing_subscriber::registry()
+    // Use set_global_default() — returns true if we set it, false if already set.
+    // Phase 2 checks this flag to choose the correct init path.
+    let claimed = tracing_subscriber::registry()
         .with(null_layer)
         .with(tracing_subscriber::EnvFilter::new("info"))
-        .try_init();
+        .set_global_default();
+    PHASE1_GLOBAL_SET.store(claimed, Ordering::Relaxed);
 
     // NOTE: any log lines before this point are silently discarded.
     // The null writer is fine — we have no writable path yet.
@@ -92,35 +98,43 @@ fn init_phase2_logging(app: &tauri::App) {
     let _ = LOG_GUARD.set(file_guard);
 
     // ── Set global tracing default with file writer ─────────────────────────────
-    // try_init() is safe here:
-    // - First run: Phase 1 set null writer as global → try_init() returns Err.
-    //   We then use set_global_default() → succeeds, null writer replaced.
-    // - Restart (never happens in same process): try_init() returns Err.
-    //   set_global_default() → succeeds, previous global replaced.
-    // - If Phase 1 ever calls init()/set_global_default() instead of try_init():
-    //   try_init() fails → set_global_default() is NOT called → no panic.
-    let file_layer = tracing_subscriber::fmt::layer()
-        .with_writer(file_writer)
-        .with_ansi(false)
-        .with_target(true)
-        .with_thread_ids(false);
+    // Strategy depends on what Phase 1 did:
+    // - PHASE1_GLOBAL_SET = true: Phase 1 claimed the global with null writer.
+    //   try_init() will fail (already set). Use set_global_default() to overwrite.
+    // - PHASE1_GLOBAL_SET = false: Phase 1 failed to claim global (someone else set it,
+    //   or no global exists). try_init() will succeed. Use it directly.
+    //
+    // Since set_global_default() takes ownership (like try_init()), we rebuild
+    // the subscriber inline for the set_global_default path.
+    let phase1_set_global = PHASE1_GLOBAL_SET.load(Ordering::Relaxed);
 
-    let file_env_filter = tracing_subscriber::EnvFilter::new("info");
-    let file_registry = tracing_subscriber::registry()
-        .with(file_layer)
-        .with(file_env_filter);
-
-    // try_init() consumes self, so clone first — one clone goes to try_init(),
-    // the other stays for set_global_default() in the error branch.
-    if file_registry.clone().try_init().is_err() {
-        // A global default already exists (from Phase 1's try_init()).
-        // Replace it with the file writer.
-        tracing::subscriber::set_global_default(file_registry)
-            .expect("set_global_default must succeed when try_init() returned Err");
+    if phase1_set_global {
+        // Phase 1 set null writer as global. Overwrite it with file writer.
+        let file_layer = tracing_subscriber::fmt::layer()
+            .with_writer(file_writer)
+            .with_ansi(false)
+            .with_target(true)
+            .with_thread_ids(false);
+        let file_env_filter = tracing_subscriber::EnvFilter::new("info");
+        let file_subscriber = tracing_subscriber::registry()
+            .with(file_layer)
+            .with(file_env_filter);
+        tracing::subscriber::set_global_default(file_subscriber);
         tracing::info!(
             "[Startup] Global subscriber upgraded to file logging (overrode null writer)."
         );
     } else {
+        // No global set (or not by us). try_init() will succeed.
+        let file_layer = tracing_subscriber::fmt::layer()
+            .with_writer(file_writer)
+            .with_ansi(false)
+            .with_target(true)
+            .with_thread_ids(false);
+        let file_env_filter = tracing_subscriber::EnvFilter::new("info");
+        let file_subscriber = tracing_subscriber::registry()
+            .with(file_layer)
+            .with(file_env_filter);
+        let _ = file_subscriber.try_init();
         tracing::info!("[Startup] Global subscriber set to file logging.");
     }
 
