@@ -61,7 +61,8 @@ pub async fn pipeline_ingest(request: PipelineIngestRequest) -> Result<PipelineI
 
     let result = crate::core::pipeline::pipeline_ingest(req, router)
         .await
-        .map_err(|e| e.message)?;
+        .map_err(|e| e.message)?
+        .ok_or_else(|| "Pipeline ingest returned None (embedding dim mismatch or other graceful failure)".to_string())?;
 
     Ok(PipelineIngestResponse {
         note_id: result.note_id,

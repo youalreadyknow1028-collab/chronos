@@ -75,7 +75,7 @@ pub struct PipelineError {
 pub async fn pipeline_ingest(
     request: IngestRequest,
     _router: &TierRouter,
-) -> Result<IngestResponse, PipelineError> {
+) -> Result<Option<IngestResponse>, PipelineError> {
     let note_id = uuid::Uuid::new_v4().to_string();
     let wiki_id = uuid::Uuid::new_v4().to_string();
     let _now = chrono::Utc::now().timestamp_millis();
@@ -148,13 +148,13 @@ pub async fn pipeline_ingest(
 
     info!("[Pipeline] Ingest complete: note_id={}, wiki_id={}", note_id, wiki_id);
 
-    Ok(IngestResponse {
+    Ok(Some(IngestResponse {
         note_id,
         wiki_entry_id: wiki_id,
         tier_used,
         provider_used,
         status: "synthesized".to_string(),
-    })
+    }))
 }
 
 /// Write to daily diary — raw unedited input, immutable

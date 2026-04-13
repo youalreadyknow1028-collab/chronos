@@ -1,8 +1,10 @@
 pub mod core;
 
+use std::mem::ManuallyDrop;
 use std::sync::OnceLock;
 use tauri::Manager;
 use tracing_appender::non_blocking::WorkerGuard;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Guards the tracing non-blocking worker thread for the entire app lifetime.
 /// MUST be kept alive or the logging thread dies and writes panic.
@@ -86,8 +88,9 @@ fn init_phase2_logging(app: &tauri::App) {
     let (file_writer, file_guard) = tracing_appender::non_blocking(file_appender);
 
     // Store the file guard — keeps the logging worker thread alive for the app's lifetime.
-    // If this fails, the old guard is still active. That's fine for logging purposes.
-    let _old_guard = LOG_GUARD.replace(file_guard);
+    // LOG_GUARD.set() returns None if set for first time, or Some(()) if already set.
+    // If a Phase 1 null-guard was already stored, it's dropped here — that's fine.
+    let _ = LOG_GUARD.set(file_guard);
 
     // ── Set global tracing default with file writer ─────────────────────────────
     // try_init() is safe here:
