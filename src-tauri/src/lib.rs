@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use tauri::Manager;
 use tracing_appender::non_blocking::WorkerGuard;
+use tracing::dispatcher::set_global_default;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Guards the tracing non-blocking worker thread for the entire app lifetime.
@@ -41,7 +42,7 @@ fn init_phase1_logging() {
     let null_subscriber = tracing_subscriber::registry()
         .with(null_layer)
         .with(tracing_subscriber::EnvFilter::new("info"));
-    let claimed = tracing_subscriber::set_global_default(null_subscriber).is_ok();
+    let claimed = set_global_default(null_subscriber).is_ok();
     PHASE1_GLOBAL_SET.store(claimed, Ordering::Relaxed);
 
     // NOTE: any log lines before this point are silently discarded.
@@ -119,7 +120,7 @@ fn init_phase2_logging(app: &tauri::App) {
     if phase1_set_global {
         // Phase 1 set null writer as global. Overwrite it with file writer.
         // set_global_default() takes ownership and overwrites the global.
-        let _prev = tracing_subscriber::set_global_default(file_subscriber);
+        let _prev = set_global_default(file_subscriber);
         tracing::info!(
             "[Startup] Global subscriber upgraded to file logging (overrode null writer)."
         );
