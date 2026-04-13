@@ -29,7 +29,10 @@ jobs:
       - name: Install Linux system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf protobuf-compiler
+
+      - name: Set PROTOC path
+        run: echo "PROTOC=/usr/bin/protoc" >> $GITHUB_ENV
 
       - name: Cache cargo dependencies
         uses: Swatinem/rust-cache@v2
