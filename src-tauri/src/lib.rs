@@ -44,8 +44,6 @@ fn init_phase1_logging() {
 /// Has access to app.path() for guaranteed-writable directories.
 /// Sets the global tracing default to use the file writer.
 fn init_phase2_logging(app: &tauri::App) {
-    use tracing_appender::non_blocking::NonBlocking;
-    use tracing_subscriber::fmt::writer::MakeWriterExt;
 
     // ── Get log directory — NEVER use cwd ──────────────────────────────────────
     // Priority: app_log_dir() > app_local_data_dir()/logs > temp_dir
